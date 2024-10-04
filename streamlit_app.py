@@ -1,15 +1,16 @@
 import streamlit as st
 import openai
 import requests
-import time
 import base64
+from io import BytesIO
 
 # Function to convert voice to text using OpenAI
 def convert_voice_to_text(api_key, audio_data):
     openai.api_key = api_key
     # Sending the audio data to OpenAI for transcription
     audio_bytes = base64.b64decode(audio_data.split(',')[1])  # decode base64 audio
-    response = openai.Audio.transcribe(model="whisper-1", file=audio_bytes)
+    audio_file = BytesIO(audio_bytes)  # Convert to a file-like object
+    response = openai.Audio.transcribe(model="whisper-1", file=audio_file)
     return response['text']
 
 # Function to send text to server API
@@ -24,13 +25,15 @@ st.write("Convert your voice to text using OpenAI Whisper")
 # OpenAI API Key input
 api_key = st.text_input("Enter your OpenAI API Key:", type="password")
 
-# Button to start recording voice
-st.markdown("""
+# HTML for recording audio with JavaScript
+st.components.v1.html(
+    """
     <h3>Record your voice:</h3>
     <button id="recordButton" style="background-color: #4CAF50; color: white; padding: 10px 24px; border-radius: 5px;">Record</button>
     <button id="stopButton" style="background-color: #f44336; color: white; padding: 10px 24px; border-radius: 5px;" disabled>Stop</button>
     <p id="status">Status: Ready to record...</p>
     <audio id="audioPlayback" controls style="display:none;"></audio>
+
     <script>
         let recordButton = document.getElementById('recordButton');
         let stopButton = document.getElementById('stopButton');
@@ -69,49 +72,37 @@ st.markdown("""
                 reader.readAsDataURL(audioBlob);
                 reader.onloadend = () => {
                     let base64AudioMessage = reader.result;
-                    fetch('/upload', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ audio_data: base64AudioMessage })
-                    }).then(response => response.json())
-                      .then(data => {
-                          status.textContent = 'Status: ' + data['message'];
-                          if (data['text']) {
-                              let textarea = document.createElement('textarea');
-                              textarea.value = data['text'];
-                              textarea.rows = 10;
-                              textarea.cols = 40;
-                              document.body.appendChild(textarea);
-                          }
-                      });
+                    const streamlitAudioEvent = new CustomEvent('audio_recorded', { detail: { base64AudioMessage } });
+                    document.dispatchEvent(streamlitAudioEvent);
                 };
             };
         };
     </script>
-    """, unsafe_allow_html=True)
+    """,
+    height=400,
+)
 
-# Streamlit server logic to handle audio processing
+# Listen for the event when JavaScript sends the recorded audio
 st.write("Recording Section:")
 
-# Handle audio data when received from the frontend
-if 'audio_data' in st.session_state:
-    audio_data = st.session_state['audio_data']
+# Retrieve the audio data from the JavaScript event
+audio_data = st.session_state.get("audio_data", None)
 
-    if audio_data and api_key:
-        st.write("Processing your audio...")
-        try:
-            # Convert audio to text
-            converted_text = convert_voice_to_text(api_key, audio_data)
-            st.write("Converted Text:")
-            st.text_area("Transcribed Text", value=converted_text, height=200)
+if audio_data and api_key:
+    st.write("Processing your audio...")
+    try:
+        # Convert audio to text
+        converted_text = convert_voice_to_text(api_key, audio_data)
+        st.write("Converted Text:")
+        st.text_area("Transcribed Text", value=converted_text, height=200)
 
-            # Share with API on server
-            api_url = st.text_input("Enter the server API URL to send text:")
-            if api_url:
-                status = send_text_to_server(api_url, converted_text)
-                if status == 200:
-                    st.success("Text successfully sent to server!")
-                else:
-                    st.error(f"Failed to send text. Server responded with status code: {status}")
-        except Exception as e:
-            st.error(f"Error converting audio: {e}")
+        # Share with API on server
+        api_url = st.text_input("Enter the server API URL to send text:")
+        if api_url:
+            status = send_text_to_server(api_url, converted_text)
+            if status == 200:
+                st.success("Text successfully sent to server!")
+            else:
+                st.error(f"Failed to send text. Server responded with status code: {status}")
+    except Exception as e:
+        st.error(f"Error converting audio: {e}")
